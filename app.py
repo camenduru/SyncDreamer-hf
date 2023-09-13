@@ -41,8 +41,6 @@ def resize_inputs(image_input, crop_size):
     results = add_margin(ref_img_, size=256)
     return results
 
-def generate(syncdreamer_model, image, elevation):
-
 
 def run_demo():
     device = f"cuda:0" if torch.cuda.is_available() else "cpu"
