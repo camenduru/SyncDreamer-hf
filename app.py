@@ -7,6 +7,7 @@ import torch
 import os
 import fire
 
+from generate import load_model
 from ldm.util import add_margin
 
 _TITLE = '''SyncDreamer: Generating Multiview-consistent Images from a Single-view Image'''
@@ -41,10 +42,40 @@ def resize_inputs(image_input, crop_size):
     results = add_margin(ref_img_, size=256)
     return results
 
+def generate(model, seed, batch_view_num, sample_num, cfg_scale,  image_input, elevation_input):
+    torch.random.manual_seed(seed)
+    np.random.seed(seed)
+
+    # prepare data
+    image_input = np.asarray(image_input)
+    image_input = image_input.astype(np.float32) / 255.0
+    ref_mask = image_input[:, :, 3:]
+    image_input[:, :, :3] = image_input[:, :, :3] * ref_mask + 1 - ref_mask  # white background
+    image_input = image_input[:, :, :3] * 2.0 - 1.0
+    image_input = torch.from_numpy(image_input.astype(np.float32))
+    elevation_input = torch.from_numpy(np.asarray([np.deg2rad(elevation_input)], np.float32))
+    data = {"input_image": image_input, "input_elevation": elevation_input}
+    for k, v in data.items():
+        data[k] = v.unsqueeze(0).cuda()
+        data[k] = torch.repeat_interleave(data[k], sample_num, dim=0)
+
+    x_sample = model.sample(data, cfg_scale, batch_view_num)
+
+    B, N, _, H, W = x_sample.shape
+    x_sample = (torch.clamp(x_sample,max=1.0,min=-1.0) + 1) * 0.5
+    x_sample = x_sample.permute(0,1,3,4,2).cpu().numpy() * 255
+    x_sample = x_sample.astype(np.uint8)
+
+    results = []
+    for bi in range(B):
+        results.append(torch.concat([x_sample[bi,ni] for ni in range(N)], 1))
+    results = torch.concat(results, 0)
+    return Image.fromarray(results)
 
 def run_demo():
-    device = f"cuda:0" if torch.cuda.is_available() else "cpu"
-    models = None # init_model(device, os.path.join(code_dir, ckpt))
+    # device = f"cuda:0" if torch.cuda.is_available() else "cpu"
+    # models = None # init_model(device, os.path.join(code_dir, ckpt))
+    model = load_model('configs/syncdreamer', 'ckpt/syncdreamer-pretrain.ckpt', strict=True)
 
     # init sam model
     mask_predictor = None # sam_init(device_idx)
@@ -86,8 +117,14 @@ def run_demo():
 
             with gr.Column(scale=1):
                 input_block = gr.Image(type='pil', image_mode='RGB', label="Input to SyncDreamer", height=256, interactive=False)
-                elevation_slider = gr.Slider(-10, 40, 30, step=5, label='Elevation angle', interactive=True)
+                elevation = gr.Slider(-10, 40, 30, step=5, label='Elevation angle', interactive=True)
+                cfg_scale = gr.Slider(1.0, 5.0, 2.0, step=0.1, label='Classifier free guidance', interactive=True)
+                # sample_num = gr.Slider(1, 2, 2, step=1, label='Sample Num', interactive=True, info='How many instance (16 images per instance)')
+                # batch_view_num = gr.Slider(1, 16, 8, step=1, label='', interactive=True)
+                seed = gr.Number(6033, label='Random seed', interactive=True)
                 run_btn = gr.Button('Run Generation', variant='primary', interactive=False)
+
+        output_block = gr.Image(type='pil', image_mode='RGB', label="Outputs of SyncDreamer", height=256, interactive=False)
 
         update_guide = lambda GUIDE_TEXT: gr.update(value=GUIDE_TEXT)
         image_block.change(fn=partial(mask_prediction, mask_predictor), inputs=[image_block], outputs=[sam_block], queue=False)\
@@ -96,7 +133,8 @@ def run_demo():
         crop_size_slider.change(fn=resize_inputs, inputs=[sam_block, crop_size_slider], outputs=[input_block], queue=False)\
                         .success(fn=partial(update_guide, _USER_GUIDE2), outputs=[guide_text], queue=False)
 
-        run_btn.click
+        run_btn.click(partial(generate, model, seed, 16, 1, cfg_scale, input_block, elevation), outputs=[output_block])\
+               .success(fn=partial(update_guide, _USER_GUIDE0), outputs=[guide_text], queue=False)
 
     demo.queue().launch(share=False, max_threads=80)  # auth=("admin", os.environ['PASSWD'])
 
