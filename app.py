@@ -97,7 +97,7 @@ def white_background(img):
 def sam_predict(predictor, raw_im):
     raw_im = np.asarray(raw_im)
     raw_rgb = white_background(raw_im)
-    h, w = raw_im.raw_rgb, raw_im.raw_rgb
+    h, w = raw_rgb.height, raw_im.width
     raw_rgb = add_margin(raw_rgb, color=255, size=max(h, w))
 
     raw_rgb.thumbnail([512, 512], Image.Resampling.LANCZOS)
