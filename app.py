@@ -9,6 +9,7 @@ import fire
 from omegaconf import OmegaConf
 
 from ldm.util import add_margin, instantiate_from_config
+from sam_utils import sam_init, sam_out_nosave
 
 _TITLE = '''SyncDreamer: Generating Multiview-consistent Images from a Single-view Image'''
 _DESCRIPTION = '''
@@ -31,12 +32,6 @@ _USER_GUIDE3 = "Generated multiview images are shown below!"
 
 deployed = True
 
-def mask_prediction(mask_predictor, image_in: Image.Image):
-    if image_in.mode=='RGBA':
-        return image_in
-    else:
-        raise NotImplementedError
-
 def resize_inputs(image_input, crop_size):
     alpha_np = np.asarray(image_input)[:, :, 3]
     coords = np.stack(np.nonzero(alpha_np), 1)[:, (1, 0)]
@@ -58,6 +53,8 @@ def generate(model, batch_view_num, sample_num, cfg_scale, seed, image_input, el
     # prepare data
     image_input = np.asarray(image_input)
     image_input = image_input.astype(np.float32) / 255.0
+    alpha_values = image_input[:,:, 3:]
+    image_input[:, :, :3] = alpha_values * image_input[:,:, :3] + 1 - alpha_values # white background
     image_input = image_input[:, :, :3] * 2.0 - 1.0
     image_input = torch.from_numpy(image_input.astype(np.float32))
     elevation_input = torch.from_numpy(np.asarray([np.deg2rad(elevation_input)], np.float32))
@@ -103,7 +100,8 @@ def run_demo():
         model = None
 
     # init sam model
-    mask_predictor = None # sam_init(device_idx)
+    mask_predictor = sam_init()
+    mask_predict_fn = lambda x: sam_out_nosave(mask_predictor, x)
 
     # with open('instructions_12345.md', 'r') as f:
     #     article = f.read()
@@ -144,7 +142,7 @@ def run_demo():
                 fig0 = gr.Image(value=Image.open('assets/crop_size.jpg'), type='pil', image_mode='RGB', height=256, show_label=False, tool=None, interactive=False)
 
             with gr.Column(scale=1):
-                input_block = gr.Image(type='pil', image_mode='RGB', label="Input to SyncDreamer", height=256, interactive=False)
+                input_block = gr.Image(type='pil', image_mode='RGBA', label="Input to SyncDreamer", height=256, interactive=False)
                 elevation = gr.Slider(-10, 40, 30, step=5, label='Elevation angle', interactive=True)
                 cfg_scale = gr.Slider(1.0, 5.0, 2.0, step=0.1, label='Classifier free guidance', interactive=True)
                 # sample_num = gr.Slider(1, 2, 2, step=1, label='Sample Num', interactive=True, info='How many instance (16 images per instance)')
@@ -156,7 +154,7 @@ def run_demo():
         output_block = gr.Image(type='pil', image_mode='RGB', label="Outputs of SyncDreamer", height=256, interactive=False)
 
         update_guide = lambda GUIDE_TEXT: gr.update(value=GUIDE_TEXT)
-        image_block.change(fn=partial(mask_prediction, mask_predictor), inputs=[image_block], outputs=[sam_block], queue=False)\
+        image_block.change(fn=mask_predict_fn, inputs=[image_block], outputs=[sam_block], queue=False)\
                    .success(fn=partial(update_guide, _USER_GUIDE1), outputs=[guide_text], queue=False)
 
         crop_size_slider.change(fn=resize_inputs, inputs=[sam_block, crop_size_slider], outputs=[input_block], queue=False)\
