@@ -82,11 +82,28 @@ def generate(model, batch_view_num, sample_num, cfg_scale, seed, image_input, el
     results = np.concatenate(results, 0)
     return Image.fromarray(results)
 
+def white_background(img):
+    img = np.asarray(img,np.float32)/255
+    rgb = img[:,:,3:] * img[:,:,:3] + 1 - img[:,:,3:]
+    rgb = (rgb*255).astype(np.uint8)
+    return Image.fromarray(rgb)
+
 def sam_predict(predictor, raw_im):
-    h, w = raw_im.height, raw_im.width
-    add_margin(raw_im, size=max(h, w))
-    raw_im.thumbnail([512, 512], Image.Resampling.LANCZOS)
-    image_sam = sam_out_nosave(predictor, raw_im.convert("RGB"))
+    raw_im = np.asarray(raw_im)
+    raw_rgb = white_background(raw_im)
+    h, w = raw_im.raw_rgb, raw_im.raw_rgb
+    raw_rgb = add_margin(raw_rgb, color=255, size=max(h, w))
+
+    raw_rgb.thumbnail([512, 512], Image.Resampling.LANCZOS)
+    image_sam = sam_out_nosave(predictor, raw_rgb.convert("RGB"))
+
+    image_sam = np.asarray(image_sam)
+    out_mask = image_sam[:,:,3:]>0
+    out_rgb = image_sam[:,:,:3] * out_mask + 1 - out_mask
+    out_mask = out_mask.astype(np.uint8) * 255
+    out_img = np.concatenate([out_rgb, out_mask], 2)
+
+    image_sam = Image.fromarray(out_img, mode='RGBA')
     torch.cuda.empty_cache()
     return image_sam
 
@@ -152,8 +169,8 @@ def run_demo():
                 input_block = gr.Image(type='pil', image_mode='RGBA', label="Input to SyncDreamer", height=256, interactive=False)
                 elevation = gr.Slider(-10, 40, 30, step=5, label='Elevation angle', interactive=True)
                 cfg_scale = gr.Slider(1.0, 5.0, 2.0, step=0.1, label='Classifier free guidance', interactive=True)
-                # sample_num = gr.Slider(1, 2, 2, step=1, label='Sample Num', interactive=True, info='How many instance (16 images per instance)')
-                # batch_view_num = gr.Slider(1, 16, 8, step=1, label='', interactive=True)
+                sample_num = gr.Slider(1, 2, 1, step=1, label='Sample num', interactive=True, info='How many instance (16 images per instance)')
+                batch_view_num = gr.Slider(1, 16, 16, step=1, label='Batch num', interactive=True)
                 seed = gr.Number(6033, label='Random seed', interactive=True)
                 run_btn = gr.Button('Run Generation', variant='primary', interactive=True)
                 fig1 = gr.Image(value=Image.open('assets/elevation.jpg'), type='pil', image_mode='RGB', height=256, show_label=False, tool=None, interactive=False)
@@ -169,7 +186,7 @@ def run_demo():
         crop_btn.click(fn=resize_inputs, inputs=[sam_block, crop_size_slider], outputs=[input_block], queue=False)\
                        .success(fn=partial(update_guide, _USER_GUIDE2), outputs=[guide_text], queue=False)
 
-        run_btn.click(partial(generate, model, 16, 1), inputs=[cfg_scale, seed, input_block, elevation], outputs=[output_block], queue=False)\
+        run_btn.click(partial(generate, model), inputs=[batch_view_num, sample_num, cfg_scale, seed, input_block, elevation], outputs=[output_block], queue=False)\
                .success(fn=partial(update_guide, _USER_GUIDE3), outputs=[guide_text], queue=False)
 
     demo.queue().launch(share=False, max_threads=80)  # auth=("admin", os.environ['PASSWD'])
