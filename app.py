@@ -82,6 +82,14 @@ def generate(model, batch_view_num, sample_num, cfg_scale, seed, image_input, el
     results = np.concatenate(results, 0)
     return Image.fromarray(results)
 
+def sam_predict(predictor, raw_im):
+    h, w = raw_im.height, raw_im.width
+    add_margin(raw_im, size=max(h, w))
+    raw_im.thumbnail([512, 512], Image.Resampling.LANCZOS)
+    image_sam = sam_out_nosave(predictor, raw_im.convert("RGB"))
+    torch.cuda.empty_cache()
+    return image_sam
+
 def run_demo():
     # device = f"cuda:0" if torch.cuda.is_available() else "cpu"
     # models = None # init_model(device, os.path.join(code_dir, ckpt))
@@ -101,7 +109,6 @@ def run_demo():
 
     # init sam model
     mask_predictor = sam_init()
-    mask_predict_fn = lambda x: sam_out_nosave(mask_predictor, x)
 
     # with open('instructions_12345.md', 'r') as f:
     #     article = f.read()
@@ -154,7 +161,7 @@ def run_demo():
         output_block = gr.Image(type='pil', image_mode='RGB', label="Outputs of SyncDreamer", height=256, interactive=False)
 
         update_guide = lambda GUIDE_TEXT: gr.update(value=GUIDE_TEXT)
-        image_block.change(fn=mask_predict_fn, inputs=[image_block], outputs=[sam_block], queue=False)\
+        image_block.change(fn=partial(sam_predict, mask_predictor), inputs=[image_block], outputs=[sam_block], queue=False)\
                    .success(fn=partial(update_guide, _USER_GUIDE1), outputs=[guide_text], queue=False)
 
         crop_size_slider.change(fn=resize_inputs, inputs=[sam_block, crop_size_slider], outputs=[input_block], queue=False)\

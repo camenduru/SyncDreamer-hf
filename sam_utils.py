@@ -16,9 +16,10 @@ def sam_init(device_id=0):
     predictor = SamPredictor(sam)
     return predictor
 
-def sam_out_nosave(predictor, input_image, bbox_sliders=(0,0,255,255)):
-    bbox = np.array(bbox_sliders)
+def sam_out_nosave(predictor, input_image, ):
     image = np.asarray(input_image)
+    h, w, _ = image.shape
+    bbox = np.array([0, 0, w, h])
 
     start_time = time.time()
     predictor.set_image(image)
