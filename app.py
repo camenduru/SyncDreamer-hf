@@ -11,6 +11,12 @@ from omegaconf import OmegaConf
 from ldm.util import add_margin, instantiate_from_config
 from sam_utils import sam_init, sam_out_nosave
 
+import torch
+print(f"Is CUDA available: {torch.cuda.is_available()}")
+# True
+print(f"CUDA device: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+# Tesla T4
+
 _TITLE = '''SyncDreamer: Generating Multiview-consistent Images from a Single-view Image'''
 _DESCRIPTION = '''
 <div>
