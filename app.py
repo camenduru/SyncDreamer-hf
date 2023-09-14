@@ -7,7 +7,6 @@ import torch
 import os
 import fire
 from omegaconf import OmegaConf
-from rembg import remove
 
 from ldm.util import add_margin, instantiate_from_config
 from sam_utils import sam_init, sam_out_nosave
@@ -38,6 +37,28 @@ _USER_GUIDE2 = "Step2: Please choose a suitable elevation angle and then click t
 _USER_GUIDE3 = "Generated multiview images are shown below!"
 
 deployed = True
+
+class BackgroundRemoval:
+    def __init__(self, device='cuda'):
+        from carvekit.api.high import HiInterface
+        self.interface = HiInterface(
+            object_type="object",  # Can be "object" or "hairs-like".
+            batch_size_seg=5,
+            batch_size_matting=1,
+            device=device,
+            seg_mask_size=640,  # Use 640 for Tracer B7 and 320 for U2Net
+            matting_mask_size=2048,
+            trimap_prob_threshold=231,
+            trimap_dilation=30,
+            trimap_erosion_iters=5,
+            fp16=True,
+        )
+
+    @torch.no_grad()
+    def __call__(self, image):
+        # image: [H, W, 3] array in [0, 255].
+        image = self.interface([image])[0]
+        return image
 
 def resize_inputs(image_input, crop_size):
     alpha_np = np.asarray(image_input)[:, :, 3]
@@ -95,9 +116,9 @@ def white_background(img):
     rgb = (rgb*255).astype(np.uint8)
     return Image.fromarray(rgb)
 
-def sam_predict(predictor, raw_im):
+def sam_predict(predictor, removal, raw_im):
     raw_im.thumbnail([512, 512], Image.Resampling.LANCZOS)
-    image_nobg = remove(raw_im.convert('RGBA'), alpha_matting=True)
+    image_nobg = removal(raw_im.convert('RGB'))
     arr = np.asarray(image_nobg)[:, :, -1]
     x_nonzero = np.nonzero(arr.sum(axis=0))
     y_nonzero = np.nonzero(arr.sum(axis=1))
@@ -140,6 +161,7 @@ def run_demo():
 
     # init sam model
     mask_predictor = sam_init()
+    removal = BackgroundRemoval()
 
     # with open('instructions_12345.md', 'r') as f:
     #     article = f.read()
@@ -192,7 +214,7 @@ def run_demo():
         output_block = gr.Image(type='pil', image_mode='RGB', label="Outputs of SyncDreamer", height=256, interactive=False)
 
         update_guide = lambda GUIDE_TEXT: gr.update(value=GUIDE_TEXT)
-        image_block.change(fn=partial(sam_predict, mask_predictor), inputs=[image_block], outputs=[sam_block], queue=False)\
+        image_block.change(fn=partial(sam_predict, mask_predictor, removal), inputs=[image_block], outputs=[sam_block], queue=False)\
                    .success(fn=partial(update_guide, _USER_GUIDE1), outputs=[guide_text], queue=False)
 
         crop_size_slider.change(fn=resize_inputs, inputs=[sam_block, crop_size_slider], outputs=[input_block], queue=False)\
