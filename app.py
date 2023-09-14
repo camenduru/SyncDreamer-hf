@@ -7,6 +7,7 @@ import torch
 import os
 import fire
 from omegaconf import OmegaConf
+from rembg import remove
 
 from ldm.util import add_margin, instantiate_from_config
 from sam_utils import sam_init, sam_out_nosave
@@ -95,21 +96,28 @@ def white_background(img):
     return Image.fromarray(rgb)
 
 def sam_predict(predictor, raw_im):
-    raw_im = np.asarray(raw_im)
-    raw_rgb = white_background(raw_im)
-    h, w = raw_rgb.height, raw_rgb.width
-    raw_rgb = add_margin(raw_rgb, color=255, size=max(h, w))
+    raw_im.thumbnail([512, 512], Image.Resampling.LANCZOS)
+    image_nobg = remove(raw_im.convert('RGBA'), alpha_matting=True)
+    arr = np.asarray(image_nobg)[:, :, -1]
+    x_nonzero = np.nonzero(arr.sum(axis=0))
+    y_nonzero = np.nonzero(arr.sum(axis=1))
+    x_min = int(x_nonzero[0].min())
+    y_min = int(y_nonzero[0].min())
+    x_max = int(x_nonzero[0].max())
+    y_max = int(y_nonzero[0].max())
+    # image_nobg.save('./nobg.png')
 
-    raw_rgb.thumbnail([512, 512], Image.Resampling.LANCZOS)
-    image_sam = sam_out_nosave(predictor, raw_rgb.convert("RGB"))
+    image_nobg.thumbnail([512, 512], Image.Resampling.LANCZOS)
+    image_sam = sam_out_nosave(predictor, image_nobg.convert("RGB"), (x_min, y_min, x_max, y_max))
 
-    image_sam = np.asarray(image_sam)
-    out_mask = image_sam[:,:,3:]>0
-    out_rgb = image_sam[:,:,:3] * out_mask + 1 - out_mask
-    out_mask = out_mask.astype(np.uint8) * 255
-    out_img = np.concatenate([out_rgb, out_mask], 2)
+    # imsave('./mask.png', np.asarray(image_sam)[:,:,3]*255)
+    image_sam = np.asarray(image_sam, np.float32) / 255
+    out_mask = image_sam[:, :, 3:]
+    out_rgb = image_sam[:, :, :3] * out_mask + 1 - out_mask
+    out_img = (np.concatenate([out_rgb, out_mask], 2) * 255).astype(np.uint8)
 
     image_sam = Image.fromarray(out_img, mode='RGBA')
+    # image_sam.save('./output.png')
     torch.cuda.empty_cache()
     return image_sam
 

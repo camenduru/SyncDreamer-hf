@@ -16,10 +16,9 @@ def sam_init(device_id=0):
     predictor = SamPredictor(sam)
     return predictor
 
-def sam_out_nosave(predictor, input_image, ):
+def sam_out_nosave(predictor, input_image, bbox):
+    bbox = np.array(bbox)
     image = np.asarray(input_image)
-    h, w, _ = image.shape
-    bbox = np.array([0, 0, h, w])
 
     start_time = time.time()
     predictor.set_image(image)
