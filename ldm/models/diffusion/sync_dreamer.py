@@ -468,13 +468,9 @@ class SyncMultiviewDiffusion(pl.LightningModule):
         x_noisy = sqrt_alphas_cumprod_ * x_start + sqrt_one_minus_alphas_cumprod_ * noise
         return x_noisy, noise
 
-    def sample(self, batch, cfg_scale, batch_view_num, use_ddim=True,
-               return_inter_results=False, inter_interval=50, inter_view_interval=2):
+    def sample(self, sampler, batch, cfg_scale, batch_view_num, return_inter_results=False, inter_interval=50, inter_view_interval=2):
         _, clip_embed, input_info = self.prepare(batch)
-        if use_ddim:
-            x_sample, inter = self.ddim.sample(input_info, clip_embed, unconditional_scale=cfg_scale, log_every_t=inter_interval, batch_view_num=batch_view_num)
-        else:
-            raise NotImplementedError
+        x_sample, inter = sampler.sample(input_info, clip_embed, unconditional_scale=cfg_scale, log_every_t=inter_interval, batch_view_num=batch_view_num)
 
         N = x_sample.shape[1]
         x_sample = torch.stack([self.decode_first_stage(x_sample[:, ni]) for ni in range(N)], 1)
@@ -540,7 +536,7 @@ class SyncMultiviewDiffusion(pl.LightningModule):
         return [opt], scheduler
 
 class SyncDDIMSampler:
-    def __init__(self, model: SyncMultiviewDiffusion, ddim_num_steps, ddim_discretize="uniform", ddim_eta=0., latent_size=32):
+    def __init__(self, model: SyncMultiviewDiffusion, ddim_num_steps, ddim_discretize="uniform", ddim_eta=1.0, latent_size=32):
         super().__init__()
         self.model = model
         self.ddpm_num_timesteps = model.num_timesteps
