@@ -12,11 +12,6 @@ from ldm.util import add_margin, instantiate_from_config
 from sam_utils import sam_init, sam_out_nosave
 
 import torch
-print(f"Is CUDA available: {torch.cuda.is_available()}")
-# True
-print(f"CUDA device: {torch.cuda.get_device_name(torch.cuda.current_device())}")
-# Tesla T4
-
 _TITLE = '''SyncDreamer: Generating Multiview-consistent Images from a Single-view Image'''
 _DESCRIPTION = '''
 <div>
@@ -26,17 +21,23 @@ _DESCRIPTION = '''
 </div>
 Given a single-view image, SyncDreamer is able to generate multiview-consistent images, which enables direct 3D reconstruction with NeuS or NeRF without SDS loss
 
-1. Upload the image.
-2. Predict the mask for the foreground object.
-3. Crop the foreground object.
-4. Generate multiview images.
+Procedure:
+**Step 0**. Upload an image or select an example.  ==> The foreground is masked out by SAM. 
+**Step 1**. Select "Crop size" and click "Crop it". ==> The foreground object is centered and resized.
+**Step 2**. Select "Elevation angle "and click "Run generation". ==> Generate multiview images. (This costs about 2 min.)
+To reconstruct a NeRF or a 3D mesh from the generated images, please refer to our [github repository](https://github.com/liuyuan-pal/SyncDreamer).
 '''
-_USER_GUIDE0 = "Step0: Please upload an image in the block above (or choose an example above). We use alpha values as object masks if given."
-_USER_GUIDE1 = "Step1: Please select a crop size using the glider."
-_USER_GUIDE2 = "Step2: Please choose a suitable elevation angle and then click the Generate button."
+_USER_GUIDE0 = "Step0: Please upload an image in the block above (or choose an example shown in the left)."
+_USER_GUIDE1 = "Step1: Please select a **Crop size** and click **Crop it**."
+_USER_GUIDE2 = "Step2: Please choose a **Elevation angle** and click **Run Generate**. This costs about 2 min."
 _USER_GUIDE3 = "Generated multiview images are shown below!"
 
 deployed = True
+
+if deployed:
+    print(f"Is CUDA available: {torch.cuda.is_available()}")
+    print(f"CUDA device: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+
 
 class BackgroundRemoval:
     def __init__(self, device='cuda'):
@@ -74,73 +75,74 @@ def resize_inputs(image_input, crop_size):
     return results
 
 def generate(model, batch_view_num, sample_num, cfg_scale, seed, image_input, elevation_input):
-    seed=int(seed)
-    torch.random.manual_seed(seed)
-    np.random.seed(seed)
-
-    # prepare data
-    image_input = np.asarray(image_input)
-    image_input = image_input.astype(np.float32) / 255.0
-    alpha_values = image_input[:,:, 3:]
-    image_input[:, :, :3] = alpha_values * image_input[:,:, :3] + 1 - alpha_values # white background
-    image_input = image_input[:, :, :3] * 2.0 - 1.0
-    image_input = torch.from_numpy(image_input.astype(np.float32))
-    elevation_input = torch.from_numpy(np.asarray([np.deg2rad(elevation_input)], np.float32))
-    data = {"input_image": image_input, "input_elevation": elevation_input}
-    for k, v in data.items():
-        if deployed:
-            data[k] = v.unsqueeze(0).cuda()
-        else:
-            data[k] = v.unsqueeze(0)
-        data[k] = torch.repeat_interleave(data[k], sample_num, dim=0)
-
     if deployed:
-        x_sample = model.sample(data, cfg_scale, batch_view_num)
+        seed=int(seed)
+        torch.random.manual_seed(seed)
+        np.random.seed(seed)
+
+        # prepare data
+        image_input = np.asarray(image_input)
+        image_input = image_input.astype(np.float32) / 255.0
+        alpha_values = image_input[:,:, 3:]
+        image_input[:, :, :3] = alpha_values * image_input[:,:, :3] + 1 - alpha_values # white background
+        image_input = image_input[:, :, :3] * 2.0 - 1.0
+        image_input = torch.from_numpy(image_input.astype(np.float32))
+        elevation_input = torch.from_numpy(np.asarray([np.deg2rad(elevation_input)], np.float32))
+        data = {"input_image": image_input, "input_elevation": elevation_input}
+        for k, v in data.items():
+            if deployed:
+                data[k] = v.unsqueeze(0).cuda()
+            else:
+                data[k] = v.unsqueeze(0)
+            data[k] = torch.repeat_interleave(data[k], sample_num, dim=0)
+
+        if deployed:
+            x_sample = model.sample(data, cfg_scale, batch_view_num)
+        else:
+            x_sample = torch.zeros(sample_num, 16, 3, 256, 256)
+
+        B, N, _, H, W = x_sample.shape
+        x_sample = (torch.clamp(x_sample,max=1.0,min=-1.0) + 1) * 0.5
+        x_sample = x_sample.permute(0,1,3,4,2).cpu().numpy() * 255
+        x_sample = x_sample.astype(np.uint8)
+
+        results = []
+        for bi in range(B):
+            results.append(np.concatenate([x_sample[bi,ni] for ni in range(N)], 1))
+        results = np.concatenate(results, 0)
+        return Image.fromarray(results)
     else:
-        x_sample = torch.zeros(sample_num, 16, 3, 256, 256)
+        return Image.fromarray(np.zeros([sample_num*256,16*256,3],np.uint8))
 
-    B, N, _, H, W = x_sample.shape
-    x_sample = (torch.clamp(x_sample,max=1.0,min=-1.0) + 1) * 0.5
-    x_sample = x_sample.permute(0,1,3,4,2).cpu().numpy() * 255
-    x_sample = x_sample.astype(np.uint8)
-
-    results = []
-    for bi in range(B):
-        results.append(np.concatenate([x_sample[bi,ni] for ni in range(N)], 1))
-    results = np.concatenate(results, 0)
-    return Image.fromarray(results)
-
-def white_background(img):
-    img = np.asarray(img,np.float32)/255
-    rgb = img[:,:,3:] * img[:,:,:3] + 1 - img[:,:,3:]
-    rgb = (rgb*255).astype(np.uint8)
-    return Image.fromarray(rgb)
 
 def sam_predict(predictor, removal, raw_im):
-    raw_im.thumbnail([512, 512], Image.Resampling.LANCZOS)
-    image_nobg = removal(raw_im.convert('RGB'))
-    arr = np.asarray(image_nobg)[:, :, -1]
-    x_nonzero = np.nonzero(arr.sum(axis=0))
-    y_nonzero = np.nonzero(arr.sum(axis=1))
-    x_min = int(x_nonzero[0].min())
-    y_min = int(y_nonzero[0].min())
-    x_max = int(x_nonzero[0].max())
-    y_max = int(y_nonzero[0].max())
-    # image_nobg.save('./nobg.png')
+    if deployed:
+        raw_im.thumbnail([512, 512], Image.Resampling.LANCZOS)
+        image_nobg = removal(raw_im.convert('RGB'))
+        arr = np.asarray(image_nobg)[:, :, -1]
+        x_nonzero = np.nonzero(arr.sum(axis=0))
+        y_nonzero = np.nonzero(arr.sum(axis=1))
+        x_min = int(x_nonzero[0].min())
+        y_min = int(y_nonzero[0].min())
+        x_max = int(x_nonzero[0].max())
+        y_max = int(y_nonzero[0].max())
+        # image_nobg.save('./nobg.png')
 
-    image_nobg.thumbnail([512, 512], Image.Resampling.LANCZOS)
-    image_sam = sam_out_nosave(predictor, image_nobg.convert("RGB"), (x_min, y_min, x_max, y_max))
+        image_nobg.thumbnail([512, 512], Image.Resampling.LANCZOS)
+        image_sam = sam_out_nosave(predictor, image_nobg.convert("RGB"), (x_min, y_min, x_max, y_max))
 
-    # imsave('./mask.png', np.asarray(image_sam)[:,:,3]*255)
-    image_sam = np.asarray(image_sam, np.float32) / 255
-    out_mask = image_sam[:, :, 3:]
-    out_rgb = image_sam[:, :, :3] * out_mask + 1 - out_mask
-    out_img = (np.concatenate([out_rgb, out_mask], 2) * 255).astype(np.uint8)
+        # imsave('./mask.png', np.asarray(image_sam)[:,:,3]*255)
+        image_sam = np.asarray(image_sam, np.float32) / 255
+        out_mask = image_sam[:, :, 3:]
+        out_rgb = image_sam[:, :, :3] * out_mask + 1 - out_mask
+        out_img = (np.concatenate([out_rgb, out_mask], 2) * 255).astype(np.uint8)
 
-    image_sam = Image.fromarray(out_img, mode='RGBA')
-    # image_sam.save('./output.png')
-    torch.cuda.empty_cache()
-    return image_sam
+        image_sam = Image.fromarray(out_img, mode='RGBA')
+        # image_sam.save('./output.png')
+        torch.cuda.empty_cache()
+        return image_sam
+    else:
+        return raw_im
 
 def run_demo():
     # device = f"cuda:0" if torch.cuda.is_available() else "cpu"
@@ -156,21 +158,28 @@ def run_demo():
         model.load_state_dict(ckpt['state_dict'], strict=True)
         model = model.cuda().eval()
         del ckpt
+        mask_predictor = sam_init()
+        removal = BackgroundRemoval()
     else:
         model = None
-
-    # init sam model
-    mask_predictor = sam_init()
-    removal = BackgroundRemoval()
-
-    # with open('instructions_12345.md', 'r') as f:
-    #     article = f.read()
+        mask_predictor = None
+        removal = None
 
     # NOTE: Examples must match inputs
-    example_folder = os.path.join(os.path.dirname(__file__), 'hf_demo', 'examples')
-    example_fns = os.listdir(example_folder)
-    example_fns.sort()
-    examples_full = [os.path.join(example_folder, x) for x in example_fns if x.endswith('.png')]
+    examples_full = [
+        ['hf_demo/examples/basket.png',30,200],
+        ['hf_demo/examples/cat.png',30,200],
+        ['hf_demo/examples/crab.png',30,200],
+        ['hf_demo/examples/elephant.png',30,200],
+        ['hf_demo/examples/flower.png',0,200],
+        ['hf_demo/examples/forest.png',30,200],
+        ['hf_demo/examples/monkey.png',30,200],
+        ['hf_demo/examples/teapot.png',0,200],
+    ]
+
+    image_block = gr.Image(type='pil', image_mode='RGBA', height=256, label='Input image', tool=None, interactive=True)
+    elevation = gr.Slider(-10, 40, 30, step=5, label='Elevation angle', interactive=True)
+    crop_size = gr.Slider(120, 240, 200, step=10, label='Crop size', interactive=True)
 
     # Compose demo layout & data flow.
     with gr.Blocks(title=_TITLE, css="hf_demo/style.css") as demo:
@@ -182,34 +191,38 @@ def run_demo():
         gr.Markdown(_DESCRIPTION)
 
         with gr.Row(variant='panel'):
-            with gr.Column(scale=1):
-                image_block = gr.Image(type='pil', image_mode='RGBA', height=256, label='Input image', tool=None, interactive=True)
-                guide_text = gr.Markdown(_USER_GUIDE0, visible=True)
+            with gr.Column(scale=1.2):
                 gr.Examples(
                     examples=examples_full,  # NOTE: elements must match inputs list!
-                    inputs=[image_block],
-                    outputs=[image_block],
+                    inputs=[image_block, elevation, crop_size],
+                    outputs=[image_block, elevation, crop_size],
                     cache_examples=False,
                     label='Examples (click one of the images below to start)',
-                    examples_per_page=40
+                    examples_per_page=5,
                 )
 
-
-            with gr.Column(scale=1):
-                sam_block = gr.Image(type='pil', image_mode='RGBA', label="SAM output", height=256, interactive=False)
-                crop_size_slider = gr.Slider(120, 240, 200, step=10, label='Crop size', interactive=True)
-                crop_btn = gr.Button('Crop the image', variant='primary', interactive=True)
+            with gr.Column(scale=0.8):
+                image_block.render()
+                guide_text = gr.Markdown(_USER_GUIDE0, visible=True)
                 fig0 = gr.Image(value=Image.open('assets/crop_size.jpg'), type='pil', image_mode='RGB', height=256, show_label=False, tool=None, interactive=False)
 
-            with gr.Column(scale=1):
-                input_block = gr.Image(type='pil', image_mode='RGBA', label="Input to SyncDreamer", height=256, interactive=False)
-                elevation = gr.Slider(-10, 40, 30, step=5, label='Elevation angle', interactive=True)
-                cfg_scale = gr.Slider(1.0, 5.0, 2.0, step=0.1, label='Classifier free guidance', interactive=True)
-                sample_num = gr.Slider(1, 2, 1, step=1, label='Sample num', interactive=True, info='How many instance (16 images per instance)')
-                batch_view_num = gr.Slider(1, 16, 16, step=1, label='Batch num', interactive=True)
-                seed = gr.Number(6033, label='Random seed', interactive=True)
-                run_btn = gr.Button('Run Generation', variant='primary', interactive=True)
+
+            with gr.Column(scale=0.8):
+                sam_block = gr.Image(type='pil', image_mode='RGBA', label="SAM output", height=256, interactive=False)
+                crop_size.render()
+                crop_btn = gr.Button('Crop it', variant='primary', interactive=True)
                 fig1 = gr.Image(value=Image.open('assets/elevation.jpg'), type='pil', image_mode='RGB', height=256, show_label=False, tool=None, interactive=False)
+
+            with gr.Column(scale=0.8):
+                input_block = gr.Image(type='pil', image_mode='RGBA', label="Input to SyncDreamer", height=256, interactive=False)
+                elevation.render()
+                with gr.Accordion('Advanced options', open=False):
+                    cfg_scale = gr.Slider(1.0, 5.0, 2.0, step=0.1, label='Classifier free guidance', interactive=True)
+                    sample_num = gr.Slider(1, 2, 1, step=1, label='Sample num', interactive=True, info='How many instance (16 images per instance)')
+                    batch_view_num = gr.Slider(1, 16, 16, step=1, label='Batch num', interactive=True)
+                    seed = gr.Number(6033, label='Random seed', interactive=True)
+                run_btn = gr.Button('Run generation', variant='primary', interactive=True)
+
 
         output_block = gr.Image(type='pil', image_mode='RGB', label="Outputs of SyncDreamer", height=256, interactive=False)
 
@@ -217,9 +230,9 @@ def run_demo():
         image_block.change(fn=partial(sam_predict, mask_predictor, removal), inputs=[image_block], outputs=[sam_block], queue=False)\
                    .success(fn=partial(update_guide, _USER_GUIDE1), outputs=[guide_text], queue=False)
 
-        crop_size_slider.change(fn=resize_inputs, inputs=[sam_block, crop_size_slider], outputs=[input_block], queue=False)\
+        crop_size.change(fn=resize_inputs, inputs=[sam_block, crop_size], outputs=[input_block], queue=False)\
                         .success(fn=partial(update_guide, _USER_GUIDE2), outputs=[guide_text], queue=False)
-        crop_btn.click(fn=resize_inputs, inputs=[sam_block, crop_size_slider], outputs=[input_block], queue=False)\
+        crop_btn.click(fn=resize_inputs, inputs=[sam_block, crop_size], outputs=[input_block], queue=False)\
                        .success(fn=partial(update_guide, _USER_GUIDE2), outputs=[guide_text], queue=False)
 
         run_btn.click(partial(generate, model), inputs=[batch_view_num, sample_num, cfg_scale, seed, input_block, elevation], outputs=[output_block], queue=False)\
