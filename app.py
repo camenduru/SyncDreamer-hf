@@ -222,7 +222,7 @@ def run_demo():
                 with gr.Accordion('Advanced options', open=False):
                     cfg_scale = gr.Slider(1.0, 5.0, 2.0, step=0.1, label='Classifier free guidance', interactive=True)
                     sample_num = gr.Slider(1, 2, 1, step=1, label='Sample num', interactive=True, info='How many instance (16 images per instance)')
-                    sample_steps = gr.Slider(40, 400, 200, step=10, label='Sample steps', interactive=True)
+                    sample_steps = gr.Slider(10, 300, 50, step=10, label='Sample steps', interactive=True)
                     batch_view_num = gr.Slider(1, 16, 16, step=1, label='Batch num', interactive=True)
                     seed = gr.Number(6033, label='Random seed', interactive=True)
                 run_btn = gr.Button('Run generation', variant='primary', interactive=True)
