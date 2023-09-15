@@ -23,15 +23,17 @@ _DESCRIPTION = '''
 Given a single-view image, SyncDreamer is able to generate multiview-consistent images, which enables direct 3D reconstruction with NeuS or NeRF without SDS loss </br>
 
 Procedure: </br>
-**Step 0**. Upload an image or select an example.  ==> The foreground is masked out by SAM. </br>
-**Step 1**. Select "Crop size" and click "Crop it". ==> The foreground object is centered and resized. </br>
+**Step 1**. Upload an image or select an example.  ==> The foreground is masked out by SAM and we crop it as inputs. </br>
 **Step 2**. Select "Elevation angle "and click "Run generation". ==> Generate multiview images. (This costs about 30s.) </br>
+You may adjust the **Crop size** and **Elevation angle** to get a better result! <br>
 To reconstruct a NeRF or a 3D mesh from the generated images, please refer to our [github repository](https://github.com/liuyuan-pal/SyncDreamer).
 '''
-_USER_GUIDE0 = "Step0: Please upload an image in the block above (or choose an example shown in the left)."
-_USER_GUIDE1 = "Step1: Please select a **Crop size** and click **Crop it**."
+_USER_GUIDE0 = "Step1: Please upload an image in the block above (or choose an example shown in the left)."
+# _USER_GUIDE1 = "Step1: Please select a **Crop size** and click **Crop it**."
 _USER_GUIDE2 = "Step2: Please choose a **Elevation angle** and click **Run Generate**. This costs about 30s."
-_USER_GUIDE3 = "Generated multiview images are shown below!"
+_USER_GUIDE3 = "Generated multiview images are shown below! (You may adjust the **Crop size** and **Elevation angle** to get a better result!)"
+
+others = '''**Step 1**. Select "Crop size" and click "Crop it". ==> The foreground object is centered and resized. </br>'''
 
 deployed = True
 
@@ -63,6 +65,7 @@ class BackgroundRemoval:
         return image
 
 def resize_inputs(image_input, crop_size):
+    if image_input is None: return None
     alpha_np = np.asarray(image_input)[:, :, 3]
     coords = np.stack(np.nonzero(alpha_np), 1)[:, (1, 0)]
     min_x, min_y = np.min(coords, 0)
@@ -119,6 +122,7 @@ def generate(model, sample_steps, batch_view_num, sample_num, cfg_scale, seed, i
 
 
 def sam_predict(predictor, removal, raw_im):
+    if raw_im is None: return None
     if deployed:
         raw_im.thumbnail([512, 512], Image.Resampling.LANCZOS)
         image_nobg = removal(raw_im.convert('RGB'))
@@ -213,7 +217,7 @@ def run_demo():
             with gr.Column(scale=0.8):
                 sam_block = gr.Image(type='pil', image_mode='RGBA', label="SAM output", height=256, interactive=False)
                 crop_size.render()
-                crop_btn = gr.Button('Crop it', variant='primary', interactive=True)
+                # crop_btn = gr.Button('Crop it', variant='primary', interactive=True)
                 fig1 = gr.Image(value=Image.open('assets/elevation.jpg'), type='pil', image_mode='RGB', height=256, show_label=False, tool=None, interactive=False)
 
             with gr.Column(scale=0.8):
@@ -230,14 +234,22 @@ def run_demo():
 
         output_block = gr.Image(type='pil', image_mode='RGB', label="Outputs of SyncDreamer", height=256, interactive=False)
 
+        def update_guide2(text, im):
+            if im is None:
+                return _USER_GUIDE0
+            else:
+                return text
         update_guide = lambda GUIDE_TEXT: gr.update(value=GUIDE_TEXT)
-        image_block.change(fn=partial(sam_predict, mask_predictor, removal), inputs=[image_block], outputs=[sam_block], queue=False)\
-                   .success(fn=partial(update_guide, _USER_GUIDE1), outputs=[guide_text], queue=False)
+
+        image_block.clear(fn=partial(update_guide, _USER_GUIDE0), outputs=[guide_text], queue=False)
+        image_block.change(fn=partial(sam_predict, mask_predictor, removal), inputs=[image_block], outputs=[sam_block], queue=False) \
+                   .success(fn=resize_inputs, inputs=[sam_block, crop_size], outputs=[input_block], queue=False)\
+                   .success(fn=partial(update_guide2, _USER_GUIDE2), inputs=[image_block], outputs=[guide_text], queue=False)\
 
         crop_size.change(fn=resize_inputs, inputs=[sam_block, crop_size], outputs=[input_block], queue=False)\
-                        .success(fn=partial(update_guide, _USER_GUIDE2), outputs=[guide_text], queue=False)
-        crop_btn.click(fn=resize_inputs, inputs=[sam_block, crop_size], outputs=[input_block], queue=False)\
-                       .success(fn=partial(update_guide, _USER_GUIDE2), outputs=[guide_text], queue=False)
+                 .success(fn=partial(update_guide, _USER_GUIDE2), outputs=[guide_text], queue=False)
+        # crop_btn.click(fn=resize_inputs, inputs=[sam_block, crop_size], outputs=[input_block], queue=False)\
+        #                .success(fn=partial(update_guide, _USER_GUIDE2), outputs=[guide_text], queue=False)
 
         run_btn.click(partial(generate, model), inputs=[sample_steps, batch_view_num, sample_num, cfg_scale, seed, input_block, elevation], outputs=[output_block], queue=False)\
                .success(fn=partial(update_guide, _USER_GUIDE3), outputs=[guide_text], queue=False)
